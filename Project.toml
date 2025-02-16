@@ -1,0 +1,8 @@
+name = "DCIMG"
+uuid = "16923f41-d46c-4b2e-a145-74a9ad4fca67"
+authors = ["RainerHeintzmann <heintzmann@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"

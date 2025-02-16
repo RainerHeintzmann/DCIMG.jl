@@ -1,0 +1,5 @@
+[deps]
+Conda = "8f4d0f93-b110-5947-807f-2305c1781a2d"
+DCIMG = "16923f41-d46c-4b2e-a145-74a9ad4fca67"
+PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
+View5D = "90d841e0-6953-4e90-9f3a-43681da8e949"
