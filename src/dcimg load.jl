@@ -208,6 +208,7 @@ function _parse_header(dcimg::DCIMGFile)
 
     dcimg.xsize = Int(dcimg._sess_header["xsize"])
     dcimg.ysize = Int(dcimg._sess_header["ysize"])
+    dcimg.bytes_per_img = Int(dcimg._sess_header["bytes_per_img"]) 
 
     # if dcimg.fmt_version == FMT_NEW
     #     i = header_size + 712
@@ -249,12 +250,56 @@ function _parse_footer(dcimg::DCIMGFile)
         dcimg._sess_footer[name] = read_field(dcimg.mm, dtype)
     end
 
-    offset = dcimg.session_footer_offset + dcimg._sess_footer["offset_to_2nd_struct"]
+    dcimg.offset = dcimg.session_footer_offset + dcimg._sess_footer["offset_to_2nd_struct"]
 
     dcimg._sess_footer2 = Dict{String, Any}()
     for (name, dtype) in SESSION_FOOTER2_DTYPE
         dcimg._sess_footer2[name] = read_field(dcimg.mm, dtype)
     end
+
+end
+
+"""
+    load_dcimg(filename)
+
+loads a DCIMG file and returns a `DCIMGFile` object. The raw data can be accessed via the `data` field of the returned object.
+
+Parameters:
+- `filename::String`: The path to the DCIMG file to load.
+
+Returns:
+- A `DCIMGFile` object representing the loaded DCIMG file.
+
+Example:
+```julia
+dcimg = load_dcimg("path/to/file.dcimg")
+```
+"""
+function load_dcimg(filename)
+    return DCIMGFile(filename)
+end
+
+"""
+Whether the footer contains 4px correction
+
+Returns
+-------
+bool
+"""
+function _has_4px_data(dcimg)
+    if (dcimg.fmt_version == FMT_NEW)
+        if (Int(dcimg._sess_header["frame_footer_size"]) >= 512)
+            return True
+        end
+        return sizeof(NEW_FRAME_FOOTER_CAMLINK_DTYPE) == dcimg._sess_header["frame_footer_size"]
+    end
+    # maybe this is sufficient
+    # return int(self._sess_footer2['4px_size']) > 0
+
+    footer_size = Int(dcimg._sess_footer["footer_size"])
+    offset_to_4px = Int(dcimg._sess_footer2["offset_to_4px"])
+
+    return footer_size == offset_to_4px + 8 * dcimg.nfrms
 end
 
 function DCIMGFile(file_path::String)
@@ -295,8 +340,31 @@ function DCIMGFile(file_path::String)
     _parse_header(dcimg)
     _parse_footer(dcimg)
     data_offset = (Int(dcimg._file_header["header_size"]) + Int(dcimg._sess_header["offset_to_data"]))
+    data_strides = nothing
 
-    datsz = (dcimg.xsize+24, dcimg.ysize, dcimg.nfrms)
+    if (dcimg.fmt_version == FMT_OLD)
+        if _has_4px_data(dcimg)
+            offset = self._session_footer_offset + int(self._sess_footer2["offset_to_4px"])
+            dcimg._4px = zeros(dcimg.nfrms, 4)
+                # dcimg.dtype, dcimg.mm, offset)
+        end
+        data_strides = (dcimg.bytes_per_img, dcimg.bytes_per_row, dcimg.byte_depth)
+    elseif (dcimg.fmt_version == FMT_NEW)
+        frame_footer_size = Int(dcimg._sess_header["frame_footer_size"][1])
+        if _has_4px_data(dcimg)
+            strides = (dcimg.bytes_per_img + frame_footer_size, bd)
+            dcimg._4px = zeros(dcimg.nfrms, 8 // dcimg.byte_depth)
+            # np.ndarray((dcimg.nfrms, 8 // dcimg.byte_depth), dcimg.dtype, dcimg.mm, data_offset + dcimg.bytes_per_img + 12, strides)
+        end
+        padding = dcimg.bytes_per_img - dcimg.xsize * dcimg.ysize * dcimg.byte_depth
+        padding ÷= dcimg.ysize
+        data_strides = (dcimg.bytes_per_img + frame_footer_size, dcimg.xsize * dcimg.byte_depth + padding, dcimg.byte_depth)
+    end
+
+    footer_size = Int(dcimg._sess_header["frame_footer_size"])
+    # self.mma = np.ndarray(self.shape, self.dtype, self.mm, data_offset, data_strides)
+
+    datsz = (dcimg.xsize+padding÷2, dcimg.ysize, dcimg.nfrms)
 
     dcimg.data = Array{UInt16}(undef, datsz)
     #@show datsz = (dcimg.ysize, dcimg.xsize, dcimg.nfrms)
@@ -307,7 +375,7 @@ function DCIMGFile(file_path::String)
     # @show typeof(mm)
     # byte_array = mm[end-prod(datsz)*2+1:end]
     frame_start = data_offset+1
-    frame_size = 2*datsz[1]*datsz[2]
+    frame_size =  dcimg.bytes_per_img # 2*datsz[1]*datsz[2]
     skip_bytes = 32  # 4 bytes framestamp, 4 bytes timestamp, 4 bytes timestamp fraction, 4 bytes 4px correction, 16 bytes unknown
     dcimg._fs_data = zeros(UInt32, dcimg.nfrms)
     dcimg._ts_data = zeros(UInt32, dcimg.nfrms, 2)
@@ -321,7 +389,7 @@ function DCIMGFile(file_path::String)
         ts2 = reinterpret(UInt32, mm[frame_start+frame_size+8:frame_start+frame_size+11])[1]
         dcimg._ts_data[n, 1] = ts1
         dcimg._ts_data[n, 2] = ts2
-        frame_start += frame_size .+ skip_bytes
+        frame_start += data_strides[1] # frame_size .+ skip_bytes
         n += 1
     end
 
